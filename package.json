@@ -1,0 +1,16 @@
+{
+  "name": "bot_termux",
+  "version": "1.0.0",
+  "description": "",
+  "main": "Node.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "inquirer": "^12.0.1",
+    "puppeteer": "^23.6.1"
+  }
+}
