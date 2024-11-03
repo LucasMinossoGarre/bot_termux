@@ -1,125 +1,106 @@
-const puppeteer = require('puppeteer');
-const inquirer = require('inquirer').default;
+const axios = require('axios');
+const inquirer = require('inquirer');
+const chalk = require('chalk');
 
-// Função de espera
-function delay(time) {
-    return new Promise(resolve => setTimeout(resolve, time));
-}
+let cookies = ''; // Para armazenar cookies da sessão
 
 // Função de login
-async function loginToInstagram(page, username, password) {
-    console.log("Tentando fazer login...");
-    await page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'networkidle2' });
-    await page.waitForSelector('input[name="username"]');
-    await page.type('input[name="username"]', username, { delay: 100 });
-    await page.type('input[name="password"]', password, { delay: 100 });
-    await page.click('button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'networkidle2' });
-    console.log("Login realizado com sucesso!");
-}
-
-// Função principal para seguir seguidores
-async function followFollowers(target, perExec, delayTime, username, password) {
-    const browser = await puppeteer.launch({ headless: true });  // Modo headless ativo
-    const page = await browser.newPage();
-
+async function loginToInstagram(username, password) {
     try {
-        await loginToInstagram(page, username, password);
+        const response = await axios({
+            method: 'post',
+            url: 'https://www.instagram.com/accounts/login/ajax/',
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'X-CSRFToken': 'missing', // Isso é necessário para algumas requisições
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            data: `username=${username}&enc_password=#PWD_INSTAGRAM_BROWSER:0:&password=${password}`,
+            withCredentials: true,
+        });
 
-        // Navegar para a página do usuário alvo
-        console.log(`Acessando o perfil de @${target}...`);
-        await page.goto(`https://www.instagram.com/${target}/`, { waitUntil: 'networkidle2' });
-        await page.waitForSelector('a[href$="/followers/"]');
-        
-        // Acessa a lista de seguidores
-        const followersLink = await page.$('a[href$="/followers/"]');
-        await followersLink.click();
-        console.log("Acessando a lista de seguidores...");
-
-        // Aguardar um pouco para garantir que a lista de seguidores carregue
-        await delay(5000);
-
-        // Seleciona a lista de seguidores e começa a seguir
-        let follows = 0;
-
-        while (follows < perExec) {
-            // Captura todos os botões de "Seguir" usando a classe específica
-            const followButtons = await page.$$('button._acan._acap._acas');
-
-            if (followButtons.length === 0) {
-                console.log("Nenhum botão de 'Seguir' encontrado. Tentando rolar para carregar mais.");
-                await page.evaluate(() => {
-                    const dialog = document.querySelector('div[role="dialog"] ul');
-                    dialog?.scrollBy(0, 1000); // Usando `?.` para evitar erro se `dialog` for null
-                });
-                await delay(2000);
-                continue;
-            }
-
-            for (const button of followButtons) {
-                try {
-                    await button.click();
-                    console.log("Perfil Seguido!");
-                    follows++;
-
-                    if (follows >= perExec) break;
-                    await delay(delayTime);  // Pausa entre cada ação de seguir
-                } catch (error) {
-                    console.error("Erro ao tentar seguir:", error);
-                }
-            }
-
-            // Rolagem adicional se ainda não alcançou o limite
-            await page.evaluate(() => {
-                const dialog = document.querySelector('div[role="dialog"] ul');
-                dialog?.scrollBy(0, 1000);
-            });
-            await delay(2000);  // Pausa para garantir que novos seguidores sejam carregados
+        // Verifica se o login foi bem-sucedido e armazena cookies
+        if (response.data.authenticated) {
+            console.log(chalk.green('Login realizado com sucesso!'));
+            cookies = response.headers['set-cookie'];
+            return true;
+        } else {
+            console.log(chalk.red('Falha no login. Verifique seu usuário e senha.'));
+            return false;
         }
-    } catch (err) {
-        console.error("Erro durante o processo:", err);
-    } finally {
-        await browser.close();
-        console.log("Processo concluído e navegador fechado.");
+    } catch (error) {
+        console.error(chalk.red('Erro durante o login:', error));
+        return false;
     }
 }
 
-// Perguntas para o usuário
+// Função para curtir postagens
+async function likePosts(targetUsername) {
+    try {
+        // Primeiro, obtemos o ID do usuário alvo
+        const userIdResponse = await axios.get(`https://www.instagram.com/${targetUsername}/?__a=1`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'Cookie': cookies.join('; ')
+            }
+        });
+
+        const userId = userIdResponse.data.graphql.user.id;
+
+        // Obtemos as últimas postagens do usuário alvo
+        const postsResponse = await axios.get(`https://i.instagram.com/api/v1/users/${userId}/feed/`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'Cookie': cookies.join('; '),
+                'X-CSRFToken': 'missing'
+            }
+        });
+
+        // Curtimos cada postagem
+        for (let post of postsResponse.data.items) {
+            await axios.post(`https://www.instagram.com/web/likes/${post.id}/like/`, null, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0',
+                    'Cookie': cookies.join('; '),
+                    'X-CSRFToken': 'missing'
+                }
+            });
+            console.log(chalk.green(`Postagem ${post.id} curtida com sucesso!`));
+        }
+
+    } catch (error) {
+        console.error(chalk.red('Erro ao tentar curtir as postagens:', error));
+    }
+}
+
+// Função principal para iniciar o processo
 (async () => {
     const questions = [
         {
-            type: "input",
-            name: "username",
-            message: "Digite seu nome de usuário:",
-            validate: (val) => val.length !== 0 || "Insira um nome de usuário!",
+            type: 'input',
+            name: 'username',
+            message: 'Digite seu nome de usuário:',
+            validate: (val) => val.length !== 0 || 'Insira um nome de usuário!'
         },
         {
-            type: "password",
-            name: "password",
-            mask: "*",
-            message: "Digite sua senha:",
-            validate: (val) => val.length !== 0 || "Insira uma senha!",
+            type: 'password',
+            name: 'password',
+            mask: '*',
+            message: 'Digite sua senha:',
+            validate: (val) => val.length !== 0 || 'Insira uma senha!'
         },
         {
-            type: "input",
-            name: "target",
-            message: "Digite o nome do usuário alvo (sem '@'):",
-            validate: (val) => val.length !== 0 || "Insira o nome do usuário alvo!",
-        },
-        {
-            type: "input",
-            name: "perExec",
-            message: "Digite o limite por execução:",
-            validate: (val) => /[0-9]/.test(val) || "Insira apenas números",
-        },
-        {
-            type: "input",
-            name: "delayTime",
-            message: "Digite o tempo de espera (em milissegundos):",
-            validate: (val) => /[0-9]/.test(val) || "Insira apenas números",
-        },
+            type: 'input',
+            name: 'targetUsername',
+            message: 'Digite o nome do usuário alvo (sem "@"):',
+            validate: (val) => val.length !== 0 || 'Insira o nome do usuário alvo!'
+        }
     ];
 
-    const { username, password, target, perExec, delayTime } = await inquirer.prompt(questions);
-    await followFollowers(target, parseInt(perExec), parseInt(delayTime), username, password);
+    const { username, password, targetUsername } = await inquirer.prompt(questions);
+
+    const isLoggedIn = await loginToInstagram(username, password);
+    if (isLoggedIn) {
+        await likePosts(targetUsername);
+    }
 })();
